@@ -8,6 +8,7 @@
                 <div class="card-header">{{ __('Tasks') }}</div>
 
                 <div class="card-body">
+                    <a href="{{ route('home') }}"><button class="btn btn-primary">Back Home</button></a>
                     <form method="GET" action="{{ route('tasks.index') }}" class="mb-3">
                         <div class="form-row align-items-end">
                             <div class="col">
@@ -58,7 +59,14 @@
                         <tbody>
                             @foreach ($tasks as $task)
                                 <tr>
-                                    <td>{{ $task->title }}</td>
+                                    <td>{{ $task->title }}
+                                        @if($task->publish_status === 'draft')
+                                        <b>(Draft)</b>
+                                    @else
+                                       
+                                    @endif
+
+                                    </td>
                                     <td>{{ $task->description }}</td>
                                     <td>{{ $task->status }}</td>
                                     <td>
