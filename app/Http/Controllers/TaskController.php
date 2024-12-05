@@ -2,16 +2,25 @@
 
 namespace App\Http\Controllers;
 
+use Log;
 use App\Models\Task;
 use Illuminate\Http\Request;
 use App\Http\Requests\TaskRequest;
-use App\Http\Controllers\Controller;
 
+use Illuminate\Support\Facades\DB;
+use App\Http\Controllers\Controller;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\File;
+use App\Repositories\TaskRepositoryInterface;
 
 class TaskController extends Controller
 {
+
+    protected $taskRepository;
+    public function __construct(TaskRepositoryInterface $taskRepository)
+    {
+        $this->taskRepository = $taskRepository;
+    }
 
     /**
      * Display a listing of the tasks.
@@ -21,35 +30,37 @@ class TaskController extends Controller
      */
     public function index(Request $request)
     {
+        try {
+            $user = Auth::user();
+            $perPage = $request->input('per_page', 10);
+            $orderBy = $request->input('order_by', 'created_at');
+            $orderDirection = $request->input('order_direction', 'asc');
+            $search = $request->input('search', '');
+            $status = $request->input('status', '');
 
+            if (!in_array($orderBy, ['title', 'created_at'])) {
+                $orderBy = 'created_at';
+            }
 
-        $perPage = $request->input('per_page', 10);
-        $orderBy = $request->input('order_by', 'created_at');
-        $orderDirection = $request->input('order_direction', 'asc');
+            if (!in_array($orderDirection, ['asc', 'desc'])) {
+                $orderDirection = 'asc';
+            }
 
-        $search = $request->input('search', '');
+            $tasks = $user->tasks()
+                ->when($search, function ($query) use ($search) {
+                    return $query->where('title', 'like', '%' . $search . '%');
+                })
+                ->when($status, function ($query) use ($status) {
+                    return $query->where('status', $status);
+                })
+                ->orderBy($orderBy, $orderDirection)
+                ->paginate($perPage);
 
-        $status = $request->input('status', '');
-
-        if (!in_array($orderBy, ['title', 'created_at'])) {
-            $orderBy = 'created_at';
+            return view('tasks.index', compact('tasks'));
+        } catch (\Exception $e) {
+            Log::error('Error fetching tasks: ' . $e->getMessage());
+            return view('tasks.index')->with('error', 'An error occurred while fetching tasks.');
         }
-
-        if (!in_array($orderDirection, ['asc', 'desc'])) {
-            $orderDirection = 'asc';
-        }
-
-        $tasks = Task::where('user_id', auth()->id())
-            ->when($search, function ($query) use ($search) {
-                return $query->where('title', 'like', '%' . $search . '%');
-            })
-            ->when($status, function ($query) use ($status) {
-                return $query->where('status', $status);
-            })
-            ->orderBy($orderBy, $orderDirection)
-            ->paginate($perPage);
-
-        return view('tasks.index', compact('tasks'));
     }
 
 
@@ -75,29 +86,32 @@ class TaskController extends Controller
      */
     public function store(TaskRequest $request)
     {
+        DB::beginTransaction();
+        try {
+            $taskData = [
+                'title' => $request->title,
+                'description' => $request->description,
+                'publish_status' => $request->publish_status,
+                'user_id' => Auth::id(),
+            ];
 
+            if ($request->hasFile('image')) {
+                $imageName = time() . '.' . $request->file('image')->getClientOriginalExtension();
+                $request->image->move(public_path('images'), $imageName);
+                $taskData['image'] = $imageName;
+            }
 
+            $new_task = $this->taskRepository->createTask($taskData);
 
-        $taskData = [
-            'title' => $request->title,
-            'description' => $request->description,
-            'publish_status' => $request->publish_status,
-            'user_id' => Auth::id(),
-        ];
-
-
-
-        if ($request->hasFile('image')) {
-            $imageName = time() . '.' . $request->file('image')->getClientOriginalExtension();
-            $request->image->move(public_path('images'), $imageName);
-            $taskData['image'] = $imageName;
+            DB::commit();
+            return redirect()->route('tasks.index')->with('success', 'Task created successfully.');
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Failed to create task: ' . $e->getMessage());
+            return redirect()->back()->with('error', 'Failed to create task. Please try again.');
         }
-
-        $new_task = Task::create($taskData);
-
-
-        return redirect()->route('tasks.index')->with('success', 'Task created successfully.');
     }
+
 
 
     /**
@@ -118,11 +132,6 @@ class TaskController extends Controller
 
 
 
-
-
-
-
-
     /**
      * Update the specified task in storage.
      *
@@ -132,24 +141,29 @@ class TaskController extends Controller
      */
     public function update(TaskRequest $request, Task $task)
     {
+        DB::beginTransaction();
+        try {
+            $taskData = $request->only('title', 'description', 'publish_status');
 
-        $task->update($request->only('title', 'description', 'publish_status'));
+            if ($request->hasFile('image')) {
+                if ($task->image) {
+                    File::delete(public_path('images/' . $task->image));
+                }
 
-        if ($request->hasFile('image')) {
-
-            if ($task->image) {
-                File::delete(public_path('images/' . $task->image));
+                $imageName = time() . '.' . $request->image->extension();
+                $request->image->move(public_path('images'), $imageName);
+                $taskData['image'] = $imageName;
             }
 
-            $imageName = time() . '.' . $request->image->extension();
-            $request->image->move(public_path('images'), $imageName);
-            $task->image = $imageName;
+            $this->taskRepository->updateTask($task->id, $taskData);
+
+            DB::commit();
+            return redirect()->route('tasks.index')->with('success', 'Task updated successfully.');
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Failed to update task: ' . $e->getMessage());
+            return redirect()->back()->with('error', 'Failed to update task. Please try again.');
         }
-
-
-        $task->save();
-
-        return redirect()->route('tasks.index')->with('success', 'Task updated successfully.');
     }
 
 
@@ -164,8 +178,13 @@ class TaskController extends Controller
      */
     public function destroy(Task $task)
     {
-        $task->delete();
-        return redirect()->route('tasks.index')->with('success', 'Task deleted successfully.');
+        try {
+            $this->taskRepository->deleteTask($task->id);
+            return redirect()->route('tasks.index')->with('success', 'Task deleted successfully.');
+        } catch (\Exception $e) {
+            Log::error('Failed to delete task: ' . $e->getMessage());
+            return redirect()->back()->with('error', 'Failed to delete task. Please try again.');
+        }
     }
 
 
@@ -180,20 +199,24 @@ class TaskController extends Controller
      */
     public function updateStatus(Request $request, $id)
     {
+        DB::beginTransaction();
+        try {
+            $request->validate([
+                'status' => 'required|in:to-do,in-progress,done',
+            ]);
 
-        $request->validate([
-            'status' => 'required|in:to-do,in-progress,done',
-        ]);
+            $updated = $this->taskRepository->updateTaskStatus($id, $request->status);
 
-
-        $task = Task::findOrFail($id);
-
-
-        $task->status = $request->status;
-
-        $task->save();
-
-
-        return redirect()->back()->with('status', 'Task status updated successfully to "' . $request->status . '"!');
+            if ($updated) {
+                DB::commit();
+                return redirect()->back()->with('status', 'Task status updated successfully to "' . $request->status . '"!');
+            } else {
+                throw new \Exception('Failed to update task status.');
+            }
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Failed to update task status: ' . $e->getMessage());
+            return redirect()->back()->with('error', 'An error occurred while updating task status.');
+        }
     }
 }

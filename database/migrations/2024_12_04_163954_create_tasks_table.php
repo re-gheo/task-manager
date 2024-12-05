@@ -27,7 +27,7 @@ return new class extends Migration
             $table->enum('publish_status', ['draft', 'published'])->default('draft');
 
 
-
+            // $table->softDeletes();
             $table->timestamps();
     
 
