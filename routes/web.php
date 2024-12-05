@@ -24,7 +24,7 @@ Auth::routes();
 Route::get('/home', [App\Http\Controllers\HomeController::class, 'index'])->name('home');
 
 
-Route::get('/test', [TaskController::class, 'index_test'])->name('tasks.index');
+
 Route::middleware(['auth'])->group(function () {
     Route::resource('tasks', TaskController::class);
     Route::put('/tasks/{id}/status', [TaskController::class, 'updateStatus'])->name('tasks.updateStatus');
